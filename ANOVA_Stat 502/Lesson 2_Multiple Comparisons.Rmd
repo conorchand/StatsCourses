@@ -1,0 +1,110 @@
+---
+title: "ANOVA_Multiple Comparisons"
+author: "Conor Chandler"
+output: 
+    md_document:
+      variant: markdown_github
+      toc: true
+editor_options:
+  chunk_output_type: console
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+---
+
+```{r}
+#Need for Dunnett distribution
+library(nCDunnett)
+```
+
+Stacked format of data from Lesson 1 was saved tor a csv file and read into an R dataframe
+```{r}
+df <- read.csv("StackedData.csv",header = F)
+```
+
+Define variables for use in subsequent steps
+```{r}
+#Four treatments
+NumOfGroups <- 4
+#Number of pairwise comparisons is simply 4 choose 2
+NumOfCompar <- factorial(NumOfGroups) / factorial(NumOfGroups-2) / factorial(2)
+#Number of observations per treatment is 6
+NumofRepl <- 6
+#Set alpha to be 5%
+alpha <- 0.05
+```
+
+Fit an ANOVA model and use R's TukeyHSD function to carryout the multiple comparison procedure
+```{r}
+aov_Fert <- aov(V2 ~ V1, data = df)
+(tuk_Res <- TukeyHSD(aov_Fert))
+```
+
+Extract the mean differences from tuk_Res and create a new data frame called pairs_df
+```{r}
+pairs_df <- as.data.frame(sapply(tuk_Res, function(x) x[,1]))
+```
+
+Extract MSE and error DF from ANOVA table, and compute the standard error for the difference between two treatment means.
+From Kutner et al. (17.30b), the standard error for pairwise comparison $D=\mu_i-\mu_i'$ is $s[\hat{D}]=\sqrt{MSE(1/n_i+1/n_i')}$. The number of observations is equal in each group, so this could be simplified to $s[\hat{D}]=\sqrt{2MSE/n}$.
+```{r}
+summary(aov_Fert)
+myMSE <- summary(aov_Fert)[1][[1]][[3]][[2]]
+errorDF <- summary(aov_Fert)[1][[1]][[1]][[2]]
+se_pair <- sqrt(myMSE*((1/NumofRepl)+(1/NumofRepl)))
+```
+
+# Comparison of Multiple Comparison Methods
+All of them produce simultaneous confidence intervals of the general form: sample statistic +/- margin of error, where margin of error = multiplier * SE(estimate). All of the methods differ in the form of the multiplier
+
+## Fisher’s Least Significant Difference (LSD)
+```{r}
+LSD_crit <- qt(1-alpha/2, df = errorDF)
+MofE <- se_pair*LSD_crit
+pairs_df$lowerLSD <- pairs_df$V1-MofE
+pairs_df$upperLSD <- pairs_df$V1+MofE
+```
+
+## Tukey
+```{r}
+qtukey_val <- qtukey(1-alpha, NumOfGroups, df = errorDF)/sqrt(2)
+MofE <- se_pair*qtukey_val
+pairs_df$lowerTuk <- pairs_df$V1-MofE
+pairs_df$upperTuk <- pairs_df$V1+MofE
+```
+
+P-values match the TukeyHSD output (right-tail probabilities)
+Note, the test statistic is $q^*=\sqrt{2}\hat{D}/s[\hat{D}]$ (Kunter et al., 17.32)
+```{r}
+ptukey(abs(pairs_df$V1*sqrt(2)/se_pair), NumOfGroups, df=errorDF,lower.tail = F)
+```
+
+## Bonferroni
+```{r}
+Bon_crit <- qt(1-alpha/2/NumOfCompar, df = errorDF)
+MofE <- se_pair*Bon_crit
+pairs_df$lowerBon <- pairs_df$V1-MofE
+pairs_df$upperBon <- pairs_df$V1+MofE
+```
+
+## Scheffe
+```{r}
+S_crit <- sqrt((NumOfGroups-1)*qf(1-alpha, df1=NumOfGroups-1, df2=errorDF))
+MofE <- se_pair*S_crit
+pairs_df$lowerS <- pairs_df$V1-MofE
+pairs_df$upperS <- pairs_df$V1+MofE
+```
+
+## Dunnett
+```{r}
+Dun_crit <- qNCDun(p=1-alpha, nu=errorDF, rho=(rep(0.5,times=NumOfGroups-1)), delta=rep(0,times=NumOfGroups-1), two.sided=T)
+MofE <- se_pair*Dun_crit
+pairs_df$lowerDun <- pairs_df$V1-MofE
+pairs_df$upperDun <- pairs_df$V1+MofE
+pairs_df$lowerDun[4:6] <- NA
+pairs_df$upperDun[4:6] <- NA
+```
+
+Comparison of the 95% simultaneous confidence intervals produced
+```{r}
+knitr::kable(pairs_df, digits = 3)
+```
+
